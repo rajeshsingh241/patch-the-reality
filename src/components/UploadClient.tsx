@@ -224,45 +224,13 @@ export default function UploadClient() {
       const walletAddress =
         wallet ?? localStorage.getItem("ptr_wallet_address") ?? "anonymous";
 
-      // ── Upload file to Supabase Storage ──────────────────────────────────
-      let contentUrl: string | null = null;
-      if (actualFile) {
-        try {
-          const ext = actualFile.name.split(".").pop() ?? "bin";
-          const storagePath = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-          const { data: uploadData, error: uploadError } =
-            await supabase.storage
-              .from("poll-media")
-              .upload(storagePath, actualFile, {
-                contentType: actualFile.type,
-                upsert: false,
-              });
-          if (uploadData && !uploadError) {
-            const {
-              data: { publicUrl },
-            } = supabase.storage
-              .from("poll-media")
-              .getPublicUrl(uploadData.path);
-            contentUrl = publicUrl;
-          } else if (uploadError) {
-            console.warn(
-              "[upload] Storage upload failed:",
-              uploadError.message,
-            );
-          }
-        } catch (storageErr) {
-          console.warn("[upload] Storage unavailable:", storageErr);
-        }
-      }
-
       const formData = new FormData();
       formData.append("wallet_address", walletAddress);
       formData.append("user_description", description);
       formData.append("content_type", fileType ?? "text");
-      if (contentUrl) {
-        formData.append("content_url", contentUrl);
+      if (actualFile) {
+        formData.append("file", actualFile);
       } else if (fileName) {
-        // Fallback: keep original filename so poll is still created
         formData.append("content_url", fileName);
       }
       formData.append(

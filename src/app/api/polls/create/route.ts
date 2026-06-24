@@ -10,7 +10,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const walletAddress = formData.get("wallet_address") as string;
     const userDescription = (formData.get("user_description") as string) ?? "";
     const contentType = (formData.get("content_type") as string) ?? "text";
-    const contentUrl = (formData.get("content_url") as string) ?? null;
+    let contentUrl = (formData.get("content_url") as string) ?? null;
+    const file = formData.get("file") as File | null;
+
+    if (file) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        const ext = file.name.split(".").pop() ?? "bin";
+        const storagePath = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        
+        const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+          .from("poll-media")
+          .upload(storagePath, buffer, {
+            contentType: file.type,
+            upsert: false,
+          });
+
+        if (uploadData && !uploadError) {
+          const {
+            data: { publicUrl },
+          } = supabaseAdmin.storage.from("poll-media").getPublicUrl(uploadData.path);
+          contentUrl = publicUrl;
+        } else {
+          console.error("[polls/create] Server upload failed:", uploadError);
+        }
+      } catch (err) {
+        console.error("[polls/create] Error uploading file:", err);
+      }
+    }
 
     // ai_analysis is the JSON result from /api/analyze already called on the client
     const aiAnalysisRaw = formData.get("ai_analysis") as string;
