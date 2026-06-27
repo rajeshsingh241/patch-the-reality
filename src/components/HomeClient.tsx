@@ -86,12 +86,34 @@ export default function HomeClient() {
           },
         );
         const json = await res.json();
+        
+        let fetchedPolls = [];
+        let total = 0;
+        
         if (json.success && json.data?.polls) {
-          setPolls(json.data.polls.map(mapToDisplayPoll));
-          setTotalPolls(json.data.total ?? 0);
+          fetchedPolls = json.data.polls.map(mapToDisplayPoll);
+          total = json.data.total ?? 0;
         }
+
+        // Merge with local mock polls
+        try {
+          const local = JSON.parse(localStorage.getItem('mock_polls') || '[]');
+          const localPolls = local.map(mapToDisplayPoll);
+          fetchedPolls = [...localPolls, ...fetchedPolls];
+          total += localPolls.length;
+        } catch (e) {}
+
+        setPolls(fetchedPolls);
+        setTotalPolls(total);
       } catch (err) {
         console.error("[HomeClient] Failed to fetch polls:", err);
+        // Fallback to local polls if network fails completely
+        try {
+          const local = JSON.parse(localStorage.getItem('mock_polls') || '[]');
+          const localPolls = local.map(mapToDisplayPoll);
+          setPolls(localPolls);
+          setTotalPolls(localPolls.length);
+        } catch (e) {}
       } finally {
         setLoading(false);
       }

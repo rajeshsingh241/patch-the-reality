@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useWallet } from "@/lib/useWallet";
+import { loadMediaUrl } from "@/lib/mediaStore";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -61,17 +62,30 @@ export default function PollDetailPage() {
   const [submittingComment, setSubmittingComment] = useState(false);
   const [commentSubmitted, setCommentSubmitted] = useState(false);
   const commentFileRef = useRef<HTMLInputElement>(null);
+  const [resolvedMediaUrl, setResolvedMediaUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const id = params.id as string;
     if (!id) return;
-    fetch(`/api/polls/${id}`)
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.success && json.data) setLivePoll(json.data);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    
+    if (id.startsWith('mock-')) {
+      try {
+        const local = JSON.parse(localStorage.getItem('mock_polls') || '[]');
+        const poll = local.find((p: any) => p.id === id);
+        if (poll) {
+          setLivePoll(poll);
+        }
+      } catch(e) {}
+      setLoading(false);
+    } else {
+      fetch(`/api/polls/${id}`)
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.success && json.data) setLivePoll(json.data);
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }
 
     // Check localStorage to see if this device already voted on this poll
     try {
@@ -88,9 +102,37 @@ export default function PollDetailPage() {
     }
   }, [params.id]);
 
+  // Resolve idb:// media URLs into real blob URLs from IndexedDB
+  useEffect(() => {
+    if (!livePoll) return;
+    const url = livePoll.content_url;
+    if (url && url.startsWith('idb://')) {
+      const key = url.replace('idb://', '');
+      loadMediaUrl(key).then((blobUrl) => {
+        if (blobUrl) setResolvedMediaUrl(blobUrl);
+      });
+    } else if (url) {
+      setResolvedMediaUrl(url);
+    }
+    return () => {
+      // Revoke old blob URLs to avoid memory leaks
+      if (resolvedMediaUrl && resolvedMediaUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(resolvedMediaUrl);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livePoll]);
+
   useEffect(() => {
     const id = params.id as string;
     if (!id) return;
+    if (id.startsWith('mock-')) {
+      try {
+        const localComments = JSON.parse(localStorage.getItem(`mock_comments_${id}`) || '[]');
+        setComments(localComments);
+      } catch(e) {}
+      return;
+    }
     fetch(`/api/polls/${id}/comments`)
       .then((r) => r.json())
       .then((json) => {
@@ -181,6 +223,34 @@ export default function PollDetailPage() {
     setVoting(true);
     setVoted(choice);
 
+    if (livePoll!.id.startsWith('mock-')) {
+      setRealBalance(15);
+      setRealTokenDelta(10);
+      setRealActualDelta(10);
+      try {
+        const votedPolls: Record<string, "yes" | "no"> = JSON.parse(
+          localStorage.getItem("ptr_voted_polls") ?? "{}",
+        );
+        votedPolls[livePoll!.id] = choice;
+        localStorage.setItem("ptr_voted_polls", JSON.stringify(votedPolls));
+      } catch {}
+      
+      try {
+        const local = JSON.parse(localStorage.getItem('mock_polls') || '[]');
+        const idx = local.findIndex((p: any) => p.id === livePoll!.id);
+        if (idx !== -1) {
+          if (choice === 'yes') local[idx].yes_votes += 1;
+          else local[idx].no_votes += 1;
+          localStorage.setItem('mock_polls', JSON.stringify(local));
+          setLivePoll(local[idx]);
+        }
+      } catch {}
+
+      setVoting(false);
+      setTimeout(() => setShowResult(true), 400);
+      return;
+    }
+
     try {
       const wallet =
         walletFromHook ??
@@ -247,7 +317,13 @@ export default function PollDetailPage() {
 
       let finalSourceUrl = sourceUrl.trim() || null;
 
-      if (commentFile) {
+      if (commentFile && livePoll!.id.startsWith('mock-')) {
+        finalSourceUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(commentFile);
+        });
+      } else if (commentFile) {
         const { supabase } = await import("@/lib/supabase");
         const ext = commentFile.name.split(".").pop() ?? "bin";
         const path = `comments/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
@@ -260,6 +336,27 @@ export default function PollDetailPage() {
           } = supabase.storage.from("poll-media").getPublicUrl(uploadData.path);
           finalSourceUrl = publicUrl;
         }
+      }
+
+      if (livePoll!.id.startsWith('mock-')) {
+        const newComment = {
+          id: `mock-comment-${Date.now()}`,
+          poll_id: livePoll!.id,
+          vote: voted,
+          comment: commentText.trim() || null,
+          source_url: finalSourceUrl,
+          username: "You",
+          created_at: new Date().toISOString()
+        };
+        try {
+          const localComments = JSON.parse(localStorage.getItem(`mock_comments_${livePoll!.id}`) || '[]');
+          localComments.unshift(newComment);
+          localStorage.setItem(`mock_comments_${livePoll!.id}`, JSON.stringify(localComments));
+          setComments(localComments);
+        } catch {}
+        setCommentSubmitted(true);
+        setSubmittingComment(false);
+        return;
       }
 
       await fetch("/api/polls/comment", {
@@ -376,56 +473,44 @@ export default function PollDetailPage() {
           style={{
             background: `linear-gradient(135deg, ${poll.gradientFrom}, ${poll.gradientTo})`,
             border: "1px solid rgba(255,255,255,0.08)",
-            height: "220px",
+            minHeight: resolvedMediaUrl ? undefined : "220px",
           }}
         >
-          {/* Background pattern */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              backgroundImage:
-                "radial-gradient(circle at 20% 50%, rgba(255,255,255,0.05) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.04) 0%, transparent 40%)",
-            }}
-          />
-
           {/* Main content: video / image / emoji fallback */}
-          {poll.content_url?.startsWith("http") ? (
+          {resolvedMediaUrl ? (
             poll.contentType === "video" ? (
               <video
-                src={poll.content_url}
+                src={resolvedMediaUrl}
                 controls
                 playsInline
                 style={{
-                  position: "absolute",
-                  inset: 0,
                   width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
+                  maxHeight: "480px",
+                  objectFit: "contain",
                   borderRadius: "16px",
                   background: "#000",
+                  display: "block",
                 }}
               />
             ) : (
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
-                src={poll.content_url}
+                src={resolvedMediaUrl}
                 alt="Poll content"
                 style={{
-                  position: "absolute",
-                  inset: 0,
                   width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
+                  maxHeight: "520px",
+                  objectFit: "contain",
                   borderRadius: "16px",
+                  background: "#0a0a20",
+                  display: "block",
                 }}
               />
             )
           ) : (
             <div
               style={{
-                position: "absolute",
-                inset: 0,
+                height: "220px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -441,6 +526,18 @@ export default function PollDetailPage() {
               </span>
             </div>
           )}
+
+          {/* Overlay info on top of image */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              pointerEvents: "none",
+            }}
+          >
 
           {/* Content type badge */}
           <div style={{ position: "absolute", top: "12px", left: "12px" }}>
@@ -460,27 +557,25 @@ export default function PollDetailPage() {
               {poll.contentType === "video" ? "▶ VIDEO" : "🖼 IMAGE"}
             </span>
           </div>
-
-          {/* Posted by */}
-          <div
-            style={{
-              position: "absolute",
-              bottom: "12px",
-              left: "12px",
-              right: "12px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.7)" }}>
-              Submitted by @{poll.postedBy}
-            </span>
-            <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.5)" }}>
-              {poll.postedAgo}
-            </span>
           </div>
         </motion.div>
+
+        {/* Posted by - below image */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "8px 4px 0",
+          }}
+        >
+          <span style={{ fontSize: "12px", color: "#8b8baa" }}>
+            Submitted by @{poll.postedBy}
+          </span>
+          <span style={{ fontSize: "12px", color: "#4a4a6a" }}>
+            {poll.postedAgo}
+          </span>
+        </div>
 
         {/* Full Description */}
         <motion.div

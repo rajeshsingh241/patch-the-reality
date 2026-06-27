@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Clock, Coins, Users } from "lucide-react";
 import { Poll } from "@/lib/data";
+import { loadMediaUrl } from "@/lib/mediaStore";
 
 interface PollCardProps {
   poll: Poll;
@@ -17,6 +18,25 @@ export default function PollCard({ poll, index }: PollCardProps) {
     totalVotes > 0 ? Math.round((poll.yesVotes / totalVotes) * 100) : 0;
   const noPercent = totalVotes > 0 ? 100 - yesPercent : 0;
   const [imgError, setImgError] = useState(false);
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const url = poll.content_url;
+    if (url && url.startsWith('idb://')) {
+      const key = url.replace('idb://', '');
+      loadMediaUrl(key).then((blobUrl) => {
+        if (blobUrl) setThumbUrl(blobUrl);
+      });
+    } else if (url && url.startsWith('http')) {
+      setThumbUrl(url);
+    }
+    return () => {
+      if (thumbUrl && thumbUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(thumbUrl);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poll.content_url]);
 
   return (
     <motion.div
@@ -79,10 +99,10 @@ export default function PollCard({ poll, index }: PollCardProps) {
                   justifyContent: "center",
                 }}
               >
-                {poll.content_url?.startsWith("http") && !imgError ? (
+                {thumbUrl && !imgError ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img
-                    src={poll.content_url}
+                    src={thumbUrl}
                     alt="Poll content"
                     style={{
                       width: "100%",

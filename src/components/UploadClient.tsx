@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useWallet } from "@/lib/useWallet";
 import { supabase } from "@/lib/supabase";
+import { saveMedia } from "@/lib/mediaStore";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Upload,
@@ -223,6 +224,43 @@ export default function UploadClient() {
     try {
       const walletAddress =
         wallet ?? localStorage.getItem("ptr_wallet_address") ?? "anonymous";
+
+      // Generate a unique poll ID up front so we can key the media blob to it
+      const pollId = `mock-${Date.now()}`;
+      let localContentUrl: string | null = null;
+      if (actualFile) {
+        // Store the actual file blob in IndexedDB (no size limit)
+        // and use a marker URL that the poll page will resolve
+        await saveMedia(pollId, actualFile);
+        localContentUrl = `idb://${pollId}`;
+      } else if (fileName) {
+        localContentUrl = fileName;
+      }
+
+      // Optimistic local save for demo purposes when DB is unreachable
+      const newPoll = {
+        id: pollId,
+        created_by: walletAddress,
+        content_url: localContentUrl,
+        content_type: fileType ?? "text",
+        user_description: description,
+        ai_generated_question: editedQuestion,
+        flag_level: aiDetection?.flagLevel ?? "safe",
+        status: "active",
+        yes_votes: 0,
+        no_votes: 0,
+        time_remaining_seconds: 86400,
+        creator_username: "You",
+        created_at: new Date().toISOString()
+      };
+      
+      try {
+        const saved = JSON.parse(localStorage.getItem('mock_polls') || '[]');
+        saved.unshift(newPoll);
+        localStorage.setItem('mock_polls', JSON.stringify(saved));
+      } catch (e) {
+        console.error("Local save failed", e);
+      }
 
       const formData = new FormData();
       formData.append("wallet_address", walletAddress);
